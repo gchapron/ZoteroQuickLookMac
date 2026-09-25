@@ -1,10 +1,12 @@
-# Zotero7QuickLook
+# ZoteroQuickLookMac
 
 A macOS plugin for Zotero 7–10 that lets you preview attachments with QuickLook by pressing **Space** — just like in Finder.
 
+Previously named Zotero7QuickLook. Installing ZoteroQuickLookMac updates the existing plugin in place.
+
 Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickLook), which supported Zotero 4–6 but broke with Zotero 7's new plugin architecture.
 
-![Zotero7QuickLook screenshot](docs/screenshot.png)
+![ZoteroQuickLookMac screenshot](docs/screenshot.png)
 
 ## Features
 
@@ -29,7 +31,7 @@ Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickL
 
 ## Installation
 
-1. Download the latest `.xpi` file from the [Releases](https://github.com/gchapron/zotero7quicklook/releases) page
+1. Download the latest `.xpi` file from the [Releases](https://github.com/gchapron/ZoteroQuickLookMac/releases) page
 2. In Zotero, go to **Tools → Plugins** (called **Add-ons** in older versions)
 3. Click the gear icon → **Install Add-on From File...**
 4. Select the downloaded `.xpi` file
@@ -40,18 +42,18 @@ Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickL
 Requires Xcode Command Line Tools (for compiling the Swift contact sheet binary).
 
 ```bash
-git clone https://github.com/gchapron/zotero7quicklook.git
-cd zotero7quicklook
+git clone https://github.com/gchapron/ZoteroQuickLookMac.git
+cd ZoteroQuickLookMac
 # Compile the contact sheet binary (universal: arm64 + x86_64)
 swiftc -O -target arm64-apple-macosx12.0 -o contactsheet-arm64 contactsheet.swift
 swiftc -O -target x86_64-apple-macosx12.0 -o contactsheet-x86_64 contactsheet.swift
 lipo -create contactsheet-arm64 contactsheet-x86_64 -output contactsheet
 rm contactsheet-arm64 contactsheet-x86_64
 # Package the plugin
-zip -r zotero7quicklook.xpi manifest.json bootstrap.js quicklook.js prefs.js contactsheet
+zip -r zoteroquicklookmac.xpi manifest.json bootstrap.js quicklook.js prefs.js contactsheet
 ```
 
-The resulting `zotero7quicklook.xpi` can be installed in Zotero as described above.
+The resulting `zoteroquicklookmac.xpi` can be installed in Zotero as described above.
 
 ## How it works
 

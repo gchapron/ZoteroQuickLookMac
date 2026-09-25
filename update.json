@@ -1,0 +1,19 @@
+{
+    "addons": {
+        "quicklook@zotero-plugin.org": {
+            "updates": [
+                {
+                    "version": "1.0.10",
+                    "update_link": "https://github.com/gchapron/ZoteroQuickLookMac/releases/download/v1.0.10/zoteroquicklookmac.xpi",
+                    "update_hash": "sha256:ca60f34619a8d763038f094793b9abab62e4725abf651c234fdc214615a5c1fd",
+                    "applications": {
+                        "zotero": {
+                            "strict_min_version": "6.999",
+                            "strict_max_version": "10.0.*"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

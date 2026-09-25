@@ -1,15 +1,15 @@
 {
     "manifest_version": 2,
-    "name": "Zotero7QuickLook",
-    "version": "1.0.9",
+    "name": "ZoteroQuickLookMac",
+    "version": "1.0.10",
     "description": "Preview attachments with macOS QuickLook by pressing Space",
-    "homepage_url": "https://github.com/gchapron/zotero7quicklook",
+    "homepage_url": "https://github.com/gchapron/ZoteroQuickLookMac",
     "author": "Guillaume Chapron",
     "icons": {},
     "applications": {
         "zotero": {
             "id": "quicklook@zotero-plugin.org",
-            "update_url": "https://raw.githubusercontent.com/gchapron/zotero7quicklook/main/update.json",
+            "update_url": "https://raw.githubusercontent.com/gchapron/ZoteroQuickLookMac/main/update.json",
             "strict_min_version": "6.999",
             "strict_max_version": "10.0.*"
         }
