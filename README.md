@@ -2,7 +2,7 @@
 
 A macOS plugin for Zotero 7–10 that lets you preview attachments by pressing **Space** — just like in Finder.
 
-This experimental branch (`codex/native-pdfkit-preview`, version `1.0.11b2`) opens PDFs in a native macOS PDFKit window. You can select text and copy it with **⌘C**, and the preview includes Zotero's saved PDF annotations, including highlights. Other attachment types continue to use macOS QuickLook.
+This experimental branch (`codex/native-pdfkit-preview`, version `1.0.11b3`) opens PDFs in a native macOS PDFKit window. You can select text and copy it with **⌘C**, and the preview includes Zotero's saved PDF annotations, including highlights. Other attachment types continue to use macOS QuickLook.
 
 Previously named Zotero7QuickLook. Installing ZoteroQuickLookMac updates the existing plugin in place.
 
@@ -22,6 +22,7 @@ Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickL
 - PDF previews support selecting text and copying it with **⌘C**
 - PDF previews include Zotero annotations exported into a fresh temporary PDF for each preview; the original PDF is not edited
 - PDF windows adapt to the first page's dimensions and available screen space, showing a normal first page in full. Very tall PDFs, such as full webpage screenshots, open at the top with a readable width and a capped window height; scroll to see the rest
+- The gap between PDF pages matches the side margins
 - Works with PDFs, images, HTML, EPUBs, and any file type that macOS QuickLook supports
 - Selecting a parent item previews its PDF attachment; falls back to EPUB, then to the first available attachment
 - EPUB files are rendered on the fly into a single styled HTML page (Palatino, 80 px margin, book-width column), with the book's own stylesheets loaded so layout and typography are preserved
@@ -51,7 +52,7 @@ Requires macOS and Xcode Command Line Tools. From this branch's checkout, run:
 
 The script compiles both Swift helpers (`contactsheet` and `pdfpreview`) for Apple silicon and Intel, targeting macOS 12. It uses temporary compiler caches, combines the architectures into universal binaries, and packages an explicit list of runtime files with normalized archive timestamps. Temporary build files are removed on exit. The generated helpers and `.xpi` are ignored by Git.
 
-The package name follows the manifest version: `zoteroquicklookmac-1.0.11b2.xpi` for this experiment. Install it in Zotero as described above. Building does not commit, push, publish a release, or update the stable update feed. See [the manual validation checklist](docs/testing.md) before publishing.
+The package name follows the manifest version: `zoteroquicklookmac-1.0.11b3.xpi` for this experiment. Install it in Zotero as described above. Building does not commit, push, publish a release, or update the stable update feed. See [the manual validation checklist](docs/testing.md) before publishing.
 
 ## How it works
 
@@ -59,7 +60,7 @@ The plugin registers a keyboard listener on Zotero's items tree. When you press 
 
 PDFKit provides text selection and the standard **⌘C** copy command. **Space**, **Escape**, and **⌘Y** close the PDF window, including when that window has focus. The helper is a separate process managed by the plugin.
 
-The initial window size and zoom use the first page's visible dimensions, including its crop and rotation. Normal pages fit completely within the available screen space. Very tall pages keep a readable width while the window height is capped, and the preview starts at the top. You can then scroll, resize the window, or change the zoom normally.
+The initial window size and zoom use the first page's visible dimensions, including its crop and rotation. Normal pages fit completely within the available screen space. Very tall pages keep a readable width while the window height is capped, and the preview starts at the top. The gap between consecutive pages matches the side margins. You can then scroll, resize the window, or change the zoom normally.
 
 For other attachment types, the plugin launches `/usr/bin/qlmanage -p <file>` and retains the subprocess handle so the preview can be closed with the toggle shortcuts.
 

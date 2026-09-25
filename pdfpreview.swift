@@ -10,6 +10,9 @@ import CoreText
 import PDFKit
 
 private let previewName = "ZoteroQuickLookMac"
+// Adjacent pages contribute both a bottom and a top margin, so each is
+// half the side margin to keep the combined gap the same width.
+private let previewPageMargins = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
 
 private func reportError(_ message: String) {
     fputs("\(previewName): \(message)\n", stderr)
@@ -85,8 +88,9 @@ private struct PreviewLayout {
         let pageWidth = max(1, pageSize.width)
         let pageHeight = max(1, pageSize.height)
         // Include page-break margins and room for a non-overlay vertical scroller.
-        let horizontalPadding: CGFloat = 24 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
-        let verticalPadding: CGFloat = 24
+        let horizontalPadding = previewPageMargins.left + previewPageMargins.right
+            + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        let verticalPadding = previewPageMargins.top + previewPageMargins.bottom
         let widthScale = max(1, min(900, availableWidth) - horizontalPadding) / pageWidth
         let heightScale = max(1, availableHeight - verticalPadding) / pageHeight
         // Fit ordinary paper in full. Long screenshots keep a readable width and scroll.
@@ -125,7 +129,7 @@ private final class PreviewWindow: NSWindow {
         pdfView.displayDirection = .vertical
         pdfView.displayBox = .cropBox
         pdfView.displaysPageBreaks = true
-        pdfView.pageBreakMargins = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        pdfView.pageBreakMargins = previewPageMargins
         pdfView.backgroundColor = .windowBackgroundColor
         pdfView.acceptsDraggedFiles = false
         if #available(macOS 13.0, *) { pdfView.isInMarkupMode = false }
