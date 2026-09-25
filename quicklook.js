@@ -8,11 +8,13 @@ var QuickLook = {
 	initialized: false,
 
 	// Process state
-	_proc: null,
 	_isActive: false,
 	_launching: false,
 	_tempDir: null,
-	_contactSheetBinary: null,
+	_binaryPromises: new Map(),
+	_previewSession: null,
+	_previewCounter: 0,
+	_sessions: new Set(),
 
 	// Per-window cleanup tracking
 	_windowListeners: new Map(),
@@ -141,6 +143,7 @@ var QuickLook = {
 	// ── Keyboard handling ─────────────────────────────────────────────
 
 	_onKeyDown(event, window) {
+		if (event.repeat) return;
 		let isSpace =
 			event.code === "Space" &&
 			!event.ctrlKey &&
@@ -170,7 +173,7 @@ var QuickLook = {
 			event.preventDefault();
 			event.stopPropagation();
 
-			if (this._isActive) {
+			if (this._isActive || this._launching) {
 				this._closeQuickLook();
 			} else {
 				let items = window.ZoteroPane.getSelectedItems();
@@ -186,7 +189,7 @@ var QuickLook = {
 			event.preventDefault();
 			event.stopPropagation();
 
-			if (this._isActive) {
+			if (this._isActive || this._launching) {
 				this._closeQuickLook();
 			} else {
 				let items = window.ZoteroPane.getSelectedItems();
@@ -202,7 +205,7 @@ var QuickLook = {
 			event.preventDefault();
 			event.stopPropagation();
 
-			if (this._isActive) {
+			if (this._isActive || this._launching) {
 				this._closeQuickLook();
 			} else {
 				let items = window.ZoteroPane.getSelectedItems();
@@ -214,7 +217,7 @@ var QuickLook = {
 		}
 
 		if (isEscape) {
-			if (this._isActive) {
+			if (this._isActive || this._launching) {
 				this._closeQuickLook();
 				event.preventDefault();
 				event.stopPropagation();
@@ -244,218 +247,249 @@ var QuickLook = {
 	// ── QuickLook open/close ──────────────────────────────────────────
 
 	async _openQuickLook(items) {
-		if (this._launching) return false;
+		return this._runPreview(async (session) => {
+			let paths = await this._getPreviewPath(items, session);
+			if (session.cancelled || !paths.length) return false;
 
-		let paths = await this._getPreviewPath(items);
-		if (paths.length === 0) {
-			this.log("No files to preview");
-			return false;
-		}
-
-		await this._launchQlmanage(paths);
-		return true;
+			let pdfs = paths.filter((path) => /\.pdf$/i.test(path));
+			let otherFiles = paths.filter((path) => !/\.pdf$/i.test(path));
+			if (pdfs.length) {
+				let binary = await this._ensureBundledBinary("pdfpreview");
+				await this._startPreviewProcess(binary, pdfs, session);
+			}
+			if (otherFiles.length) {
+				await this._launchQlmanage(otherFiles, session);
+			}
+			return !session.cancelled;
+		});
 	},
 
 	async _openNotePreview(items) {
-		if (this._launching) return false;
-
-		let paths = await this._getNotePaths(items);
-		if (paths.length === 0) {
-			this.log("No notes to preview");
-			return false;
-		}
-
-		await this._launchQlmanage(paths);
-		return true;
+		return this._runPreview(async (session) => {
+			let paths = await this._getNotePaths(items);
+			if (session.cancelled || !paths.length) return false;
+			await this._launchQlmanage(paths, session);
+			return !session.cancelled;
+		});
 	},
 
 	async _openContactSheet(items) {
-		if (this._launching) return false;
+		return this._runPreview(async (session) => {
+			// Contact sheets remain image-based; PDFKit handles regular PDF previews.
+			let paths = await this._getPreviewPath(items);
+			let pdfPath = paths.find((path) => /\.pdf$/i.test(path));
+			if (session.cancelled || !pdfPath) return false;
 
-		// Get only PDF file paths
-		let paths = await this._getPreviewPath(items);
-		let pdfPaths = paths.filter(
-			(p) => p.toLowerCase().endsWith(".pdf")
-		);
-
-		if (pdfPaths.length === 0) {
-			this.log("No PDF files for contact sheet");
-			return false;
-		}
-
-		// Ensure the contact sheet binary is deployed
-		let binary = await this._ensureContactSheetBinary();
-		if (!binary) {
-			this.log("Contact sheet binary not available");
-			return false;
-		}
-
-		// Generate contact sheet for the first PDF
-		let pdfPath = pdfPaths[0];
-		let tempDir = this._getTempDirPath();
-		await IOUtils.makeDirectory(tempDir, { ignoreExisting: true });
-		let outputPath = PathUtils.join(tempDir, "contactsheet.html");
-
-		const { Subprocess } = ChromeUtils.importESModule(
-			"resource://gre/modules/Subprocess.sys.mjs"
-		);
-
-		this.log("Generating contact sheet for: " + pdfPath);
-
-		try {
-			let proc = await Subprocess.call({
-				command: binary,
-				arguments: [pdfPath, outputPath, "5", "200"],
-			});
+			let binary = await this._ensureBundledBinary("contactsheet");
+			await IOUtils.makeDirectory(session.tempDir, { createAncestors: true });
+			let outputPath = PathUtils.join(session.tempDir, "contactsheet.html");
+			let proc = await this._startPreviewProcess(
+				binary, [pdfPath, outputPath, "5", "200"], session, false
+			);
+			if (!proc) return false;
 			let result = await proc.wait();
+			if (session.cancelled) return false;
 			if (result.exitCode !== 0) {
-				this.log(
-					"Contact sheet generation failed with code " +
-						result.exitCode
-				);
-				return false;
+				throw new Error("Could not generate the PDF contact sheet.");
 			}
-		} catch (e) {
-			this.log("Contact sheet generation error: " + e);
-			return false;
-		}
-
-		// QuickLook the generated contact sheet HTML
-		await this._launchQlmanage([outputPath]);
-		return true;
+			await this._launchQlmanage([outputPath], session);
+			return !session.cancelled;
+		});
 	},
 
-	async _ensureContactSheetBinary() {
-		if (this._contactSheetBinary) {
-			if (await IOUtils.exists(this._contactSheetBinary)) {
-				return this._contactSheetBinary;
-			}
-		}
-
-		let tempDir = this._getTempDirPath();
-		await IOUtils.makeDirectory(tempDir, { ignoreExisting: true });
-
-		let binaryPath = PathUtils.join(tempDir, "contactsheet");
-
-		// Check if already deployed
-		if (await IOUtils.exists(binaryPath)) {
-			this._contactSheetBinary = binaryPath;
-			return binaryPath;
-		}
-
-		// Copy the pre-compiled binary from the plugin bundle to temp
-		this.log("Deploying contact sheet binary...");
-
-		try {
-			let binaryURI = this.rootURI + "contactsheet";
-			let response = await fetch(binaryURI);
-			let data = await response.arrayBuffer();
-			await IOUtils.write(binaryPath, new Uint8Array(data));
-
-			// Make executable
-			await IOUtils.setPermissions(binaryPath, 0o755);
-
-			this.log("Contact sheet binary deployed");
-			this._contactSheetBinary = binaryPath;
-			return binaryPath;
-		} catch (e) {
-			this.log("Failed to deploy contact sheet binary: " + e);
-			return null;
-		}
-	},
-
-	async _launchQlmanage(filePaths) {
-		if (this._launching) return;
+	async _runPreview(prepare) {
+		if (this._launching) return false;
+		this._closeQuickLook();
+		let session = {
+			cancelled: false,
+			preparing: true,
+			cleaning: false,
+			processes: new Set(),
+			tempDir: PathUtils.join(this._getTempDirPath(),
+				"preview-" + Date.now() + "-" + (++this._previewCounter)),
+		};
+		session.done = new Promise((resolve) => { session.resolve = resolve; });
+		this._sessions.add(session);
+		this._previewSession = session;
 		this._launching = true;
-
-		const { Subprocess } = ChromeUtils.importESModule(
-			"resource://gre/modules/Subprocess.sys.mjs"
-		);
-
-		let args = ["-p", ...filePaths];
-		this.log("Launching: qlmanage " + args.join(" "));
-
 		try {
-			this._proc = await Subprocess.call({
-				command: "/usr/bin/qlmanage",
-				arguments: args,
-			});
-			this._isActive = true;
-
-			// Monitor process exit (user may close qlmanage externally)
-			this._proc.wait().then(() => {
-				this.log("qlmanage exited");
-				this._isActive = false;
-				this._proc = null;
-			});
-		} catch (e) {
-			this.log("Failed to launch qlmanage: " + e);
-			this._isActive = false;
-			this._proc = null;
+			return await prepare(session);
+		} catch (error) {
+			if (!session.cancelled) {
+				// A mixed selection may already have opened one of its viewers.
+				this._closeQuickLook();
+				this._reportPreviewError(error);
+			}
+			return false;
 		} finally {
+			session.preparing = false;
+			if (this._previewSession === session) this._launching = false;
+			this._finishPreviewSession(session);
+		}
+	},
+
+	async _finishPreviewSession(session) {
+		if (session.preparing || session.processes.size || session.cleaning) return;
+		session.cleaning = true;
+		if (this._previewSession === session) {
+			this._previewSession = null;
+			this._isActive = false;
 			this._launching = false;
 		}
+		try {
+			await IOUtils.remove(session.tempDir, { recursive: true, ignoreAbsent: true });
+		} catch (error) {
+			this.log("Could not remove preview temporary files: " + error);
+		} finally {
+			this._sessions.delete(session);
+			session.resolve();
+		}
+	},
+
+	_reportPreviewError(error) {
+		this.log("Preview failed: " + error);
+		Services.prompt.alert(
+			Zotero.getMainWindow(), "ZoteroQuickLookMac",
+			"Could not open the preview. " + error.message
+		);
+	},
+
+	async _ensureBundledBinary(name) {
+		if (!this._binaryPromises.has(name)) {
+			this._binaryPromises.set(name, (async () => {
+				let tempDir = this._getTempDirPath();
+				await IOUtils.makeDirectory(tempDir, { ignoreExisting: true });
+				let path = PathUtils.join(tempDir, name);
+				let response = await fetch(this.rootURI + name);
+				if (!response.ok) throw new Error("Missing bundled helper: " + name);
+				await IOUtils.write(path, new Uint8Array(await response.arrayBuffer()));
+				await IOUtils.setPermissions(path, 0o755);
+				return path;
+			})());
+		}
+		try {
+			return await this._binaryPromises.get(name);
+		} catch (error) {
+			this._binaryPromises.delete(name);
+			throw error;
+		}
+	},
+
+	async _launchQlmanage(filePaths, session) {
+		return this._startPreviewProcess("/usr/bin/qlmanage", ["-p", ...filePaths], session);
+	},
+
+	async _startPreviewProcess(command, args, session, reportFailure = true) {
+		if (session.cancelled) return null;
+		const { Subprocess } = ChromeUtils.importESModule(
+			"resource://gre/modules/Subprocess.sys.mjs"
+		);
+		let proc = await Subprocess.call({ command, arguments: args, stderr: "stdout" });
+		// Drain the pipe while the helper runs, keeping only a bounded error tail.
+		let output = (async () => {
+			let tail = "", chunk;
+			while ((chunk = await proc.stdout.readString())) {
+				tail = (tail + chunk).slice(-4096);
+			}
+			return tail;
+		})().catch(() => "");
+		session.processes.add(proc);
+		if (session.cancelled) {
+			try { proc.kill(); } catch (error) { this.log("Preview close: " + error); }
+		} else if (this._previewSession === session) {
+			this._isActive = true;
+		}
+		proc.wait().then(async (result) => {
+			let details = await output;
+			if (result.exitCode !== 0 && !session.cancelled && reportFailure) {
+				this._reportPreviewError(new Error(details.trim() ||
+					"The preview helper exited with code " + result.exitCode + "."));
+			}
+		}).catch((error) => {
+			if (!session.cancelled) this.log("Preview process error: " + error);
+		}).finally(() => {
+			session.processes.delete(proc);
+			this._finishPreviewSession(session);
+		});
+		return proc;
 	},
 
 	_closeQuickLook() {
-		if (this._proc) {
-			this.log("Killing qlmanage");
-			this._proc.kill();
-			this._proc = null;
-			this._isActive = false;
+		let session = this._previewSession;
+		if (!session) return;
+		session.cancelled = true;
+		this._previewSession = null;
+		this._launching = false;
+		this._isActive = false;
+		for (let proc of session.processes) {
+			try { proc.kill(); } catch (error) { this.log("Preview close: " + error); }
 		}
+		this._finishPreviewSession(session);
 	},
 
 	// ── File path resolution ──────────────────────────────────────────
 
-	async _getPreviewPath(items) {
-		let paths = [];
-
+	async _getPreviewPath(items, session = null) {
+		let files = new Map();
 		for (let item of items) {
-			if (item.isAttachment() && !item.isNote()) {
+			if (session?.cancelled) return [];
+			if (item.isAttachment()) {
 				let path = await this._getAttachmentPath(item);
-				if (path) {
-					path = await this._normalizeForPreview(path);
-					if (path) paths.push(path);
-				}
+				if (path) files.set(path, item);
 			} else if (item.isNote()) {
 				let path = await this._writeNoteToTempFile(item);
-				if (path) paths.push(path);
-			} else {
-				// Regular item: prefer PDF, then EPUB, then any other attachment
-				let attachmentIDs = item.getAttachments(false);
-				let pdfPath = null;
-				let epubPath = null;
-				let fallbackPath = null;
-
-				for (let attID of attachmentIDs) {
-					let attachment = Zotero.Items.get(attID);
-					if (attachment.isNote()) continue;
+				if (path) files.set(path, null);
+			} else if (item.isRegularItem()) {
+				// Keep the attachment with its path so Zotero annotations can be exported.
+				let pdf = null, epub = null, fallback = null;
+				for (let id of item.getAttachments(false)) {
+					if (session?.cancelled) return [];
+					let attachment = Zotero.Items.get(id);
 					let path = await this._getAttachmentPath(attachment);
 					if (!path) continue;
-
-					let lower = path.toLowerCase();
-					if (lower.endsWith(".pdf")) {
-						pdfPath = path;
-						break;
-					}
-					if (lower.endsWith(".epub") && !epubPath) {
-						epubPath = path;
-					}
-					if (!fallbackPath) {
-						fallbackPath = path;
-					}
+					let file = { path, attachment };
+					if (/\.pdf$/i.test(path)) { pdf = file; break; }
+					if (/\.epub$/i.test(path) && !epub) epub = file;
+					if (!fallback) fallback = file;
 				}
-
-				let chosen = pdfPath || epubPath || fallbackPath;
-				if (chosen) {
-					chosen = await this._normalizeForPreview(chosen);
-					if (chosen) paths.push(chosen);
-				}
+				let chosen = pdf || epub || fallback;
+				if (chosen) files.set(chosen.path, chosen.attachment);
 			}
 		}
 
+		let paths = [];
+		for (let [path, attachment] of files) {
+			if (session?.cancelled) return [];
+			if (session && /\.pdf$/i.test(path) && attachment) {
+				path = await this._getAnnotatedPDFPath(attachment, path, session);
+			} else {
+				path = await this._normalizeForPreview(path);
+			}
+			if (path) paths.push(path);
+		}
 		return paths;
+	},
+
+	async _getAnnotatedPDFPath(attachment, path, session) {
+		if (session.cancelled) return null;
+		// Existing embedded annotations are already visible in PDFKit.
+		let annotations = attachment.getAnnotations();
+		if (!annotations.some((annotation) => !annotation.annotationIsExternal)) return path;
+
+		let directory = PathUtils.join(session.tempDir, String(attachment.id));
+		await IOUtils.makeDirectory(directory, { createAncestors: true });
+		if (session.cancelled) return null;
+		let output = PathUtils.join(directory, PathUtils.filename(path));
+		try {
+			// Export into a fresh temporary copy on every open. Never use transfer=true:
+			// that option removes the annotations from the Zotero library.
+			await Zotero.PDFWorker.export(attachment.id, output, true);
+			if (session.cancelled) return null;
+			if (!(await IOUtils.exists(output))) throw new Error("No PDF was exported.");
+			return output;
+		} catch (error) {
+			throw new Error("Could not include Zotero annotations in the PDF preview. " + error.message);
+		}
 	},
 
 	async _normalizeForPreview(path) {
@@ -499,35 +533,20 @@ var QuickLook = {
 		}
 
 		let path = await item.getFilePathAsync();
-		if (!path) {
-			this.log("No file path for attachment " + item.id);
-			return null;
-		}
+		if (path && await IOUtils.exists(path)) return path;
 
-		let exists = await IOUtils.exists(path);
-		if (!exists) {
-			this.log("File does not exist: " + path);
-
-			// Try downloading synced file
-			if (
-				item.isImportedAttachment() &&
-				Zotero.Sync.Storage.Local.getEnabledForLibrary(item.libraryID)
-			) {
-				try {
-					this.log("Attempting to download synced file...");
-					await Zotero.Sync.Runner.downloadFile(item);
-					path = await item.getFilePathAsync();
-					if (path && (await IOUtils.exists(path))) {
-						return path;
-					}
-				} catch (e) {
-					this.log("Download failed: " + e);
-				}
+		// getFilePathAsync() returns false for files that are not downloaded yet.
+		if (item.isImportedAttachment() &&
+			Zotero.Sync.Storage.Local.getEnabledForLibrary(item.libraryID)) {
+			try {
+				await Zotero.Sync.Runner.downloadFile(item);
+				path = await item.getFilePathAsync();
+				if (path && await IOUtils.exists(path)) return path;
+			} catch (error) {
+				this.log("Download failed: " + error);
 			}
-			return null;
 		}
-
-		return path;
+		return null;
 	},
 
 	// ── Note preview ──────────────────────────────────────────────────
@@ -930,10 +949,12 @@ var QuickLook = {
 
 	// ── Shutdown ──────────────────────────────────────────────────────
 
-	shutdown() {
+	async shutdown() {
 		this._closeQuickLook();
-		this._cleanTempDir();
 		this.initialized = false;
+		await Promise.all([...this._sessions].map((session) => session.done));
+		await this._cleanTempDir();
+		this._binaryPromises.clear();
 	},
 
 	async _cleanTempDir() {

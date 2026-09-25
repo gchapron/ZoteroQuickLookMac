@@ -25,10 +25,10 @@ function onMainWindowUnload({ window }) {
 	QuickLook.removeFromWindow(window);
 }
 
-function shutdown() {
+async function shutdown() {
 	log("Shutting down");
 	QuickLook.removeFromAllWindows();
-	QuickLook.shutdown();
+	await QuickLook.shutdown();
 	QuickLook = undefined;
 }
 

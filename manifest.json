@@ -1,8 +1,8 @@
 {
     "manifest_version": 2,
     "name": "ZoteroQuickLookMac",
-    "version": "1.0.10",
-    "description": "Preview attachments with macOS QuickLook by pressing Space",
+    "version": "1.0.11",
+    "description": "Preview PDFs with selectable text and Zotero annotations; use QuickLook for other attachments",
     "homepage_url": "https://github.com/gchapron/ZoteroQuickLookMac",
     "author": "Guillaume Chapron",
     "icons": {},
