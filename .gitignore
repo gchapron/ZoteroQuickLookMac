@@ -2,3 +2,5 @@
 *.xpi
 contactsheet
 !contactsheet.swift
+pdfpreview
+!pdfpreview.swift
