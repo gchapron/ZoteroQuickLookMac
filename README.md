@@ -1,6 +1,6 @@
 # Zotero7QuickLook
 
-A macOS plugin for Zotero 7 and later (tested on 7, 8, and 9) that lets you preview attachments with QuickLook by pressing **Space** — just like in Finder.
+A macOS plugin for Zotero 7–10 that lets you preview attachments with QuickLook by pressing **Space** — just like in Finder.
 
 Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickLook), which supported Zotero 4–6 but broke with Zotero 7's new plugin architecture.
 
@@ -24,13 +24,13 @@ Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickL
 ## Requirements
 
 - **macOS** (uses the native `qlmanage` QuickLook command)
-- **Zotero 7** or later
+- **Zotero 7, 8, 9, or 10.x**
 - **macOS 12 (Monterey)** or later (for the contact sheet feature)
 
 ## Installation
 
 1. Download the latest `.xpi` file from the [Releases](https://github.com/gchapron/zotero7quicklook/releases) page
-2. In Zotero, go to **Tools → Add-ons**
+2. In Zotero, go to **Tools → Plugins** (called **Add-ons** in older versions)
 3. Click the gear icon → **Install Add-on From File...**
 4. Select the downloaded `.xpi` file
 5. Restart Zotero
