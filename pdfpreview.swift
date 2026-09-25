@@ -70,19 +70,52 @@ private final class PreviewPDFView: PDFView, NSMenuItemValidation {
     }
 }
 
+private struct PreviewLayout {
+    let contentSize: NSSize
+    let scale: CGFloat
+
+    init(page: PDFPage?, visibleFrame: NSRect) {
+        let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+        let titlebarHeight = NSWindow.frameRect(forContentRect: .zero, styleMask: style).height
+        let availableWidth = max(1, visibleFrame.width - 48)
+        let availableHeight = max(1, visibleFrame.height - 48 - titlebarHeight)
+        let rawBounds = page?.bounds(for: .cropBox) ?? NSRect(x: 0, y: 0, width: 612, height: 792)
+        // Crop boxes are in unrotated page coordinates, including nonzero origins.
+        let pageSize = rawBounds.applying(page?.transform(for: .cropBox) ?? .identity).size
+        let pageWidth = max(1, pageSize.width)
+        let pageHeight = max(1, pageSize.height)
+        // Include page-break margins and room for a non-overlay vertical scroller.
+        let horizontalPadding: CGFloat = 24 + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        let verticalPadding: CGFloat = 24
+        let widthScale = max(1, min(900, availableWidth) - horizontalPadding) / pageWidth
+        let heightScale = max(1, availableHeight - verticalPadding) / pageHeight
+        // Fit ordinary paper in full. Long screenshots keep a readable width and scroll.
+        scale = pageHeight / pageWidth > 2 ? widthScale : min(widthScale, heightScale)
+        contentSize = NSSize(
+            width: min(availableWidth, max(360, ceil(pageWidth * scale + horizontalPadding))),
+            height: min(availableHeight, max(300, ceil(pageHeight * scale + verticalPadding)))
+        )
+    }
+}
+
 private final class PreviewWindow: NSWindow {
     let pdfView: PreviewPDFView
+    private let initialScale: CGFloat
+    private let initialVisibleFrame: NSRect
 
-    init(document: PDFDocument, url: URL) {
-        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 900)
-        let size = NSSize(width: min(900, visibleFrame.width * 0.8),
-                          height: min(1000, visibleFrame.height * 0.85))
-        pdfView = PreviewPDFView(frame: NSRect(origin: .zero, size: size))
+    init(document: PDFDocument, url: URL, visibleFrame: NSRect? = nil) {
+        let visibleFrame = visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 900)
+        let layout = PreviewLayout(page: document.page(at: 0), visibleFrame: visibleFrame)
+        initialScale = layout.scale
+        initialVisibleFrame = visibleFrame
+        pdfView = PreviewPDFView(frame: NSRect(origin: .zero, size: layout.contentSize))
         super.init(contentRect: pdfView.frame,
                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
                    backing: .buffered, defer: false)
         title = url.deletingPathExtension().lastPathComponent
-        minSize = NSSize(width: 360, height: 300)
+        contentMinSize = NSSize(width: min(360, layout.contentSize.width),
+                                height: min(300, layout.contentSize.height))
         isReleasedWhenClosed = false
         isExcludedFromWindowsMenu = false
         tabbingMode = .disallowed
@@ -90,14 +123,47 @@ private final class PreviewWindow: NSWindow {
         pdfView.autoresizingMask = [.width, .height]
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
+        pdfView.displayBox = .cropBox
         pdfView.displaysPageBreaks = true
+        pdfView.pageBreakMargins = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         pdfView.backgroundColor = .windowBackgroundColor
         pdfView.acceptsDraggedFiles = false
         if #available(macOS 13.0, *) { pdfView.isInMarkupMode = false }
         prepareReadOnlyAnnotations(in: document)
+        // autoScales uses fit-width in continuous mode, which clips portrait pages.
+        pdfView.autoScales = false
         pdfView.document = document
-        pdfView.autoScales = true
-        center()
+        setFrameOrigin(NSPoint(x: visibleFrame.midX - frame.width / 2,
+                               y: visibleFrame.midY - frame.height / 2))
+        positionFirstPage()
+    }
+
+    func positionFirstPage() {
+        guard let page = pdfView.document?.page(at: 0) else { return }
+        pdfView.layoutSubtreeIfNeeded()
+        // Assigning a document resets PDFKit's scale limits. Set them afterward
+        // so unusually large page sizes can still fit below the default 10% zoom.
+        pdfView.minScaleFactor = min(0.1, initialScale)
+        pdfView.maxScaleFactor = max(10, initialScale)
+        pdfView.scaleFactor = initialScale
+        pdfView.layoutDocumentView()
+        let transform = page.transform(for: pdfView.displayBox)
+        let bounds = page.bounds(for: pdfView.displayBox).applying(transform)
+        // PDF destinations use page space. Convert the displayed top-left back
+        // so rotated pages and cropped PDFs open at the same visual position.
+        let topLeft = CGPoint(x: bounds.minX,
+                              y: bounds.maxY + pdfView.pageBreakMargins.top / initialScale)
+            .applying(transform.inverted())
+        pdfView.go(to: PDFDestination(page: page, at: topLeft))
+    }
+
+    func constrainToVisibleScreen() {
+        var constrained = frame
+        constrained.origin.x = min(max(frame.minX, initialVisibleFrame.minX),
+                                   initialVisibleFrame.maxX - frame.width)
+        constrained.origin.y = min(max(frame.minY, initialVisibleFrame.minY),
+                                   initialVisibleFrame.maxY - frame.height)
+        setFrame(constrained, display: false)
     }
 }
 
@@ -143,11 +209,16 @@ private final class PreviewApplicationDelegate: NSObject, NSApplicationDelegate,
             let window = PreviewWindow(document: document, url: url)
             window.delegate = self
             if let point = cascadePoint { window.setFrameTopLeftPoint(point) }
+            window.constrainToVisibleScreen()
             cascadePoint = NSPoint(x: window.frame.minX + 24, y: window.frame.maxY - 24)
             windows.append(window)
             if show {
                 window.makeKeyAndOrderFront(nil)
                 window.makeFirstResponder(window.pdfView)
+                // The scroll view gets its final viewport after the window opens.
+                // Set the destination again then, before the user starts reading.
+                window.positionFirstPage()
+                DispatchQueue.main.async { [weak window] in window?.positionFirstPage() }
             }
         }
     }
@@ -305,6 +376,70 @@ private func runSelfTest() -> Bool {
     }
     guard require(yellowPixels > 100, "PDFKit must render the embedded highlight") else { return false }
 
+    // Assert real PDFKit viewport geometry, not just the window-sizing formula.
+    // In particular, PDFView's root bounds can include the titlebar area.
+    let testScreens = [
+        NSRect(x: 0, y: 25, width: 1280, height: 775),
+        NSRect(x: 1440, y: 0, width: 1920, height: 1055),
+        NSRect(x: 0, y: 0, width: 800, height: 550)
+    ]
+    let pageCases: [(String, CGSize, Int, CGRect?, Bool)] = [
+        ("A4", CGSize(width: 595, height: 842), 0, nil, false),
+        ("Letter", CGSize(width: 612, height: 792), 0, nil, false),
+        ("Landscape", CGSize(width: 842, height: 595), 0, nil, false),
+        ("Rotated portrait", CGSize(width: 842, height: 595), 90, nil, false),
+        ("Cropped portrait", CGSize(width: 700, height: 1100), 180,
+         CGRect(x: 40, y: 120, width: 595, height: 842), false),
+        ("Long webpage", CGSize(width: 595, height: 3600), 0, nil, true),
+        ("Rotated long webpage", CGSize(width: 3600, height: 595), 90, nil, true),
+        ("Rotated long webpage 270", CGSize(width: 3600, height: 595), 270, nil, true),
+        ("Large-format portrait", CGSize(width: 11900, height: 16840), 0, nil, false)
+    ]
+    for screen in testScreens {
+        for (name, size, rotation, crop, isTall) in pageCases {
+            let fixture = PDFDocument()
+            for _ in 0..<2 {
+                let fixturePage = PDFPage()
+                fixturePage.setBounds(CGRect(origin: .zero, size: size), for: .mediaBox)
+                if let crop { fixturePage.setBounds(crop, for: .cropBox) }
+                fixturePage.rotation = rotation
+                fixture.insert(fixturePage, at: fixture.pageCount)
+            }
+            let window = PreviewWindow(document: fixture, url: URL(fileURLWithPath: "/layout.pdf"),
+                                       visibleFrame: screen)
+            // Exercise the deferred startup layout too, then check the settled viewport.
+            DispatchQueue.main.async { window.positionFirstPage() }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            defer { window.close() }
+            let pdf = window.pdfView
+            guard let page = fixture.page(at: 0),
+                  let clip = pdf.documentView?.enclosingScrollView?.contentView else { return false }
+            let viewport = pdf.convert(clip.bounds, from: clip).intersection(pdf.visibleRect)
+            let rendered = pdf.convert(page.bounds(for: pdf.displayBox), from: page).standardized
+            guard require(screen.insetBy(dx: -1, dy: -1).contains(window.frame),
+                          "\(name): window must stay within the available screen"),
+                  require(rendered.minX >= viewport.minX - 2 && rendered.maxX <= viewport.maxX + 2,
+                          "\(name): page width must fit the viewport (page \(rendered), viewport \(viewport), scale \(pdf.scaleFactor), minimum \(pdf.minScaleFactor))") else { return false }
+            if isTall {
+                let pageTop = pdf.isFlipped ? rendered.minY : rendered.maxY
+                let viewportTop = pdf.isFlipped ? viewport.minY : viewport.maxY
+                guard require(abs(pageTop - viewportTop) <= 25,
+                              "\(name): long page must open at its top"),
+                      require(rendered.height > viewport.height,
+                              "\(name): long page must remain readable and scroll vertically") else { return false }
+            } else {
+                guard require(viewport.insetBy(dx: -2, dy: -2).contains(rendered),
+                              "\(name): the entire first page must be visible") else { return false }
+            }
+            // Initialization must not install a later callback that undoes user zoom.
+            let zoomed = pdf.scaleFactor * 1.2
+            pdf.scaleFactor = zoomed
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            guard require(abs(pdf.scaleFactor - zoomed) < 0.001,
+                          "\(name): user zoom must survive subsequent layout") else { return false }
+        }
+    }
+
     for (keyCode, characters, modifiers, shouldDismiss) in [
         (UInt16(49), " ", NSEvent.ModifierFlags(), true),
         (UInt16(53), "\u{1b}", NSEvent.ModifierFlags(), true),
@@ -324,7 +459,7 @@ private func runSelfTest() -> Bool {
           require(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApp),
                   "the helper must terminate after its last window closes") else { return false }
 
-    print("PDFKit self-test passed: selectable text, Command-C/private pasteboard, read-only forms, rendered highlight, dismissal shortcuts, multiple-window teardown.")
+    print("PDFKit self-test passed: selectable text, Command-C/private pasteboard, read-only forms, rendered highlight, first-page fit/top alignment, capped tall pages, dismissal shortcuts, multiple-window teardown.")
     return true
 }
 

@@ -2,7 +2,7 @@
 
 A macOS plugin for Zotero 7–10 that lets you preview attachments by pressing **Space** — just like in Finder.
 
-This experimental branch (`codex/native-pdfkit-preview`, version `1.0.11b1`) opens PDFs in a native macOS PDFKit window. You can select text and copy it with **⌘C**, and the preview includes Zotero's saved PDF annotations, including highlights. Other attachment types continue to use macOS QuickLook.
+This experimental branch (`codex/native-pdfkit-preview`, version `1.0.11b2`) opens PDFs in a native macOS PDFKit window. You can select text and copy it with **⌘C**, and the preview includes Zotero's saved PDF annotations, including highlights. Other attachment types continue to use macOS QuickLook.
 
 Previously named Zotero7QuickLook. Installing ZoteroQuickLookMac updates the existing plugin in place.
 
@@ -21,6 +21,7 @@ Spiritual successor to [ZoteroQuickLook](https://github.com/mronkko/ZoteroQuickL
 - **Right-click → Quick Look Contact Sheet** — Context menu entry for contact sheet
 - PDF previews support selecting text and copying it with **⌘C**
 - PDF previews include Zotero annotations exported into a fresh temporary PDF for each preview; the original PDF is not edited
+- PDF windows adapt to the first page's dimensions and available screen space, showing a normal first page in full. Very tall PDFs, such as full webpage screenshots, open at the top with a readable width and a capped window height; scroll to see the rest
 - Works with PDFs, images, HTML, EPUBs, and any file type that macOS QuickLook supports
 - Selecting a parent item previews its PDF attachment; falls back to EPUB, then to the first available attachment
 - EPUB files are rendered on the fly into a single styled HTML page (Palatino, 80 px margin, book-width column), with the book's own stylesheets loaded so layout and typography are preserved
@@ -50,13 +51,15 @@ Requires macOS and Xcode Command Line Tools. From this branch's checkout, run:
 
 The script compiles both Swift helpers (`contactsheet` and `pdfpreview`) for Apple silicon and Intel, targeting macOS 12. It uses temporary compiler caches, combines the architectures into universal binaries, and packages an explicit list of runtime files with normalized archive timestamps. Temporary build files are removed on exit. The generated helpers and `.xpi` are ignored by Git.
 
-The package name follows the manifest version: `zoteroquicklookmac-1.0.11b1.xpi` for this experiment. Install it in Zotero as described above. Building does not commit, push, publish a release, or update the stable update feed. See [the manual validation checklist](docs/testing.md) before publishing.
+The package name follows the manifest version: `zoteroquicklookmac-1.0.11b2.xpi` for this experiment. Install it in Zotero as described above. Building does not commit, push, publish a release, or update the stable update feed. See [the manual validation checklist](docs/testing.md) before publishing.
 
 ## How it works
 
 The plugin registers a keyboard listener on Zotero's items tree. When you press Space, it resolves the selected item's attachment. For PDFs, it exports a temporary copy with Zotero's saved annotations and opens it in the bundled `pdfpreview` helper, which uses Apple's PDFKit. Each preview gets a fresh export so saved annotation changes appear when you reopen it. The original attachment is left unchanged.
 
 PDFKit provides text selection and the standard **⌘C** copy command. **Space**, **Escape**, and **⌘Y** close the PDF window, including when that window has focus. The helper is a separate process managed by the plugin.
+
+The initial window size and zoom use the first page's visible dimensions, including its crop and rotation. Normal pages fit completely within the available screen space. Very tall pages keep a readable width while the window height is capped, and the preview starts at the top. You can then scroll, resize the window, or change the zoom normally.
 
 For other attachment types, the plugin launches `/usr/bin/qlmanage -p <file>` and retains the subprocess handle so the preview can be closed with the toggle shortcuts.
 
@@ -67,7 +70,7 @@ The contact sheet feature (Option+Space) uses a pre-compiled universal binary (a
 ## Experimental limitations
 
 - Copying requires an existing text layer. Scanned image-only PDFs need OCR first, and a PDF's copy restrictions still apply.
-- This experiment adds PDF selection and annotations only. It does not add these features to EPUB or note previews.
+- Native text selection, annotations, and page-aware window sizing apply to PDF previews. EPUB and note previews continue to use QuickLook.
 - Contact sheets remain image-based thumbnails; their text cannot be selected.
 - The native PDF preview is for reading and copying. Edit annotations in Zotero, save them, and reopen the preview to see the changes.
 - The plugin ID and stable update URL are preserved so existing installations can be updated in place. This prerelease does not change `update.json` or announce itself to stable users.
